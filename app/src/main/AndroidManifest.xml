@@ -26,6 +26,7 @@
         <service
             android:name=".VoiceAssistantService"
             android:exported="false"
+            android:process=":voice"
             android:foregroundServiceType="microphone" />
         <service
             android:name=".PlaybackService"

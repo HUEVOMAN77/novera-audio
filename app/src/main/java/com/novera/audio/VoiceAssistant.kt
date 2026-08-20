@@ -5,7 +5,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.Player
 import java.text.Normalizer
 
 object VoiceAssistant {
@@ -16,7 +16,10 @@ object VoiceAssistant {
         return wakeWords.any { normalized == it }
     }
 
-    fun execute(context: Context, spoken: String): String? {
+    fun execute(context: Context, spoken: String): String? =
+        execute(context, spoken, PlaybackEngine.player(context))
+
+    fun execute(context: Context, spoken: String, player: Player): String? {
         val normalized = normalize(spoken)
         val wakeWord = wakeWords.firstOrNull { normalized.contains(it) } ?: return null
         val command = normalized
@@ -25,7 +28,6 @@ object VoiceAssistant {
             .trim()
         if (command.isBlank()) return "Te escucho. Di un comando como pausa, siguiente o reproduce una canción"
 
-        val player = PlaybackEngine.player(context)
         return when {
             command.contains("escane") || command.contains("buscar musica") || command.contains("buscar canciones") -> {
                 val count = VoiceLibrary.load(context).size
@@ -66,7 +68,7 @@ object VoiceAssistant {
         }
     }
 
-    private fun playMatching(context: Context, player: ExoPlayer, query: String): String {
+    private fun playMatching(context: Context, player: Player, query: String): String {
         val library = VoiceLibrary.load(context)
         val matches = library.filter { "${it.title} ${it.artist} ${it.album}".contains(query, ignoreCase = true) }
         val selected = matches.firstOrNull() ?: return "No encontré una canción llamada $query"
@@ -78,7 +80,7 @@ object VoiceAssistant {
         return "Reproduciendo ${selected.title}"
     }
 
-    private fun addCurrentToPlaylist(context: Context, command: String, player: ExoPlayer): String {
+    private fun addCurrentToPlaylist(context: Context, command: String, player: Player): String {
         val currentId = player.currentMediaItem?.mediaId ?: return "No hay una canción reproduciéndose"
         val track = VoiceLibrary.load(context).firstOrNull { it.id == currentId } ?: return "No pude identificar la canción actual"
         val name = extractPlaylistName(command) ?: return "Dime el nombre de la playlist"

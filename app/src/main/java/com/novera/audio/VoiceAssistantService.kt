@@ -5,15 +5,22 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -33,39 +40,91 @@ class VoiceAssistantService : Service() {
     private val modelExecutor = Executors.newSingleThreadExecutor()
     private var model: Model? = null
     private var speechService: SpeechService? = null
+    private var mediaController: MediaController? = null
+    private var mediaControllerFuture: ListenableFuture<MediaController>? = null
     private var listening = false
     private var loadingModel = false
     private var transcriptWindow = ""
     private var lastHandledAt = 0L
     private var lastTranscriptAt = 0L
+    private var foregroundStarted = false
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Preparando reconocimiento offline…"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (intent?.action == ACTION_STOP) {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
-            updateNotification("Permiso de micrófono no concedido")
+            stopListening()
+            if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-
-        when (intent?.action) {
-            ACTION_STOP -> {
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
-                stopListening()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
-            else -> {
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-                ensureModelAndListen()
-            }
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
+            stopSelf()
+            return START_NOT_STICKY
         }
+        if (!promoteToForeground()) return START_NOT_STICKY
+
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
+        ensureMediaController()
         return START_NOT_STICKY
+    }
+
+    private fun ensureMediaController() {
+        if (mediaController != null) {
+            ensureModelAndListen()
+            return
+        }
+        if (mediaControllerFuture != null) return
+        runCatching {
+            MediaController.Builder(
+                this,
+                SessionToken(this, ComponentName(this, PlaybackService::class.java))
+            ).buildAsync().also { future ->
+                mediaControllerFuture = future
+                future.addListener({
+                    runCatching {
+                        mediaController = future.get()
+                        ensureModelAndListen()
+                    }.onFailure { error ->
+                        android.util.Log.e(TAG, "No se pudo conectar con MediaSession", error)
+                        updateNotification("Reproductor no disponible; voz detenida")
+                        stopListening()
+                    }
+                }, MoreExecutors.directExecutor())
+            }
+        }.onFailure { error ->
+            android.util.Log.e(TAG, "No se pudo solicitar MediaSession", error)
+            updateNotification("No se pudo conectar con el reproductor")
+        }
+    }
+
+    private fun promoteToForeground(): Boolean {
+        if (foregroundStarted) return true
+        return runCatching {
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification("Preparando reconocimiento offline…"),
+                type
+            )
+            foregroundStarted = true
+            true
+        }.getOrElse { error ->
+            android.util.Log.e(TAG, "No se pudo iniciar el foreground service de micrófono", error)
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
+            stopSelf()
+            false
+        }
     }
 
     private fun ensureModelAndListen() {
@@ -175,16 +234,18 @@ class VoiceAssistantService : Service() {
         transcriptWindow = "$transcriptWindow $text".trim().takeLast(MAX_TRANSCRIPT_LENGTH)
         if (now - lastHandledAt < COMMAND_COOLDOWN_MS) return
 
-        val response = VoiceAssistant.execute(this, transcriptWindow)
-        if (response != null) {
-            lastHandledAt = now
-            if (VoiceAssistant.isWakeWordOnly(transcriptWindow)) {
-                updateNotification("Te escucho · di tu comando")
-            } else {
-                transcriptWindow = ""
-                updateNotification(response)
-                runCatching { speechService?.reset() }
-            }
+        val response = if (mediaController == null) {
+            if (VoiceAssistant.isWakeWordOnly(transcriptWindow)) "Te escucho · di tu comando" else return
+        } else {
+            VoiceAssistant.execute(this, transcriptWindow, mediaController!!) ?: return
+        }
+        lastHandledAt = now
+        if (VoiceAssistant.isWakeWordOnly(transcriptWindow)) {
+            updateNotification("Te escucho · di tu comando")
+        } else {
+            transcriptWindow = ""
+            updateNotification(response)
+            runCatching { speechService?.reset() }
         }
     }
 
@@ -268,6 +329,11 @@ class VoiceAssistantService : Service() {
         modelExecutor.shutdownNow()
         runCatching { model?.close() }
         model = null
+        runCatching { mediaController?.release() }
+        mediaController = null
+        mediaControllerFuture?.cancel(true)
+        mediaControllerFuture = null
+        foregroundStarted = false
         super.onDestroy()
     }
 
@@ -291,18 +357,25 @@ class VoiceAssistantService : Service() {
                 .getBoolean(KEY_ENABLED, false)
 
         fun start(context: Context) {
-            val intent = Intent(context, VoiceAssistantService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.startForegroundService(context, intent)
-            } else {
-                context.startService(intent)
+            runCatching {
+                val intent = Intent(context, VoiceAssistantService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.startForegroundService(context, intent)
+                } else {
+                    context.startService(intent)
+                }
+            }.onFailure { error ->
+                android.util.Log.e(TAG, "No se pudo solicitar el servicio de voz", error)
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
             }
         }
 
         fun stop(context: Context) {
-            context.startService(
-                Intent(context, VoiceAssistantService::class.java).setAction(ACTION_STOP)
-            )
+            runCatching {
+                context.stopService(Intent(context, VoiceAssistantService::class.java))
+            }.onFailure { error ->
+                android.util.Log.e(TAG, "No se pudo detener el servicio de voz", error)
+            }
         }
     }
 }
