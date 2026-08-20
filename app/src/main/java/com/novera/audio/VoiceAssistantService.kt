@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -26,6 +28,11 @@ class VoiceAssistantService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP -> {
                 stopListening()
@@ -47,7 +54,9 @@ class VoiceAssistantService : Service() {
             updateNotification("Reconocimiento local no disponible en este teléfono")
             return
         }
-        recognizer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SpeechRecognizer.createOnDeviceSpeechRecognizer(this) else null
+        recognizer = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SpeechRecognizer.createOnDeviceSpeechRecognizer(this) else null
+        }.getOrNull()
         if (recognizer == null) {
             updateNotification("Se necesita Android 12 o superior para voz totalmente local")
             return
@@ -70,17 +79,23 @@ class VoiceAssistantService : Service() {
             override fun onEvent(eventType: Int, params: android.os.Bundle?) = Unit
         })
         listening = true
-        recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        val recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale("es", "ES"))
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        })
+        }
+        runCatching { recognizer?.startListening(recognitionIntent) }
+            .onFailure {
+                listening = false
+                updateNotification("No se pudo iniciar la escucha local")
+                restartListening()
+            }
     }
 
     private fun restartListening() {
         if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, false)) return
-        android.os.Handler(mainLooper).postDelayed({ startListening() }, 700L)
+        android.os.Handler(mainLooper).postDelayed({ runCatching { startListening() } }, 700L)
     }
 
     private fun stopListening() {
@@ -111,7 +126,7 @@ class VoiceAssistantService : Service() {
     }
 
     private fun updateNotification(message: String) {
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message))
+        runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message)) }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

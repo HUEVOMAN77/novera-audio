@@ -25,7 +25,6 @@ object PlaybackEngine {
     }
 
     fun startService(context: Context) {
-        if (isHuaweiFamily()) return
         val intent = Intent(context, PlaybackService::class.java)
         runCatching { androidx.core.content.ContextCompat.startForegroundService(context, intent) }
     }
