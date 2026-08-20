@@ -119,6 +119,7 @@ class AudioEffectsController(
 
     private fun createEffects(audioSessionId: Int): AudioFxState {
         var current = AudioFxState(sessionId = audioSessionId)
+        if (skipVendorEffects) return current
         equalizer = runCatching { Equalizer(0, audioSessionId) }.getOrNull()
         equalizer?.let { effect ->
             runCatching {

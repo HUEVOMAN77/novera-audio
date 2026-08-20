@@ -25,7 +25,14 @@ object PlaybackEngine {
     }
 
     fun startService(context: Context) {
+        if (isHuaweiFamily()) return
         val intent = Intent(context, PlaybackService::class.java)
-        androidx.core.content.ContextCompat.startForegroundService(context, intent)
+        runCatching { androidx.core.content.ContextCompat.startForegroundService(context, intent) }
+    }
+
+    fun isHuaweiFamily(): Boolean {
+        val manufacturer = android.os.Build.MANUFACTURER.lowercase()
+        val brand = android.os.Build.BRAND.lowercase()
+        return manufacturer.contains("huawei") || manufacturer.contains("honor") || brand.contains("huawei") || brand.contains("honor")
     }
 }
