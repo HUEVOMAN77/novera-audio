@@ -7,116 +7,246 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import android.os.IBinder
 import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
-import java.util.Locale
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.Executors
 
+/**
+ * Servicio foreground de reconocimiento de voz completamente local.
+ * Vosk se ejecuta con el modelo español incluido en assets, por lo que no
+ * depende de Google Speech Services ni de una conexión a Internet.
+ */
 class VoiceAssistantService : Service() {
-    private var recognizer: SpeechRecognizer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val modelExecutor = Executors.newSingleThreadExecutor()
+    private var model: Model? = null
+    private var speechService: SpeechService? = null
     private var listening = false
+    private var loadingModel = false
+    private var transcriptWindow = ""
+    private var lastHandledAt = 0L
+    private var lastTranscriptAt = 0L
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Di: Novera, y después tu comando"))
+        startForeground(NOTIFICATION_ID, notification("Preparando reconocimiento offline…"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
+            updateNotification("Permiso de micrófono no concedido")
             stopSelf()
             return START_NOT_STICKY
         }
+
         when (intent?.action) {
             ACTION_STOP -> {
-                stopListening()
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
+                stopListening()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
             else -> {
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-                startListening()
+                ensureModelAndListen()
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startListening() {
-        if (listening) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-            updateNotification("Reconocimiento local no disponible en este teléfono")
+    private fun ensureModelAndListen() {
+        if (model != null) {
+            startListening()
             return
         }
-        recognizer = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SpeechRecognizer.createOnDeviceSpeechRecognizer(this) else null
-        }.getOrNull()
-        if (recognizer == null) {
-            updateNotification("Se necesita Android 12 o superior para voz totalmente local")
-            return
-        }
-        recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("Escuchando localmente · di: Novera …") }
-            override fun onBeginningOfSpeech() { updateNotification("Escuchando tu comando…") }
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() { listening = false }
-            override fun onError(error: Int) { listening = false; restartListening() }
-            override fun onResults(results: android.os.Bundle?) {
-                listening = false
-                val phrase = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                val response = VoiceAssistant.execute(this@VoiceAssistantService, phrase)
-                if (response != null) updateNotification(response)
-                restartListening()
+        if (loadingModel) return
+
+        loadingModel = true
+        updateNotification("Cargando reconocimiento español offline…")
+        modelExecutor.execute {
+            runCatching {
+                val modelDirectory = File(filesDir, MODEL_DIRECTORY)
+                if (!File(modelDirectory, "am/final.mdl").exists()) {
+                    modelDirectory.deleteRecursively()
+                    copyAssetTree(MODEL_ASSET_PATH, modelDirectory)
+                }
+                Model(modelDirectory.absolutePath)
+            }.onSuccess { loadedModel ->
+                mainHandler.post {
+                    loadingModel = false
+                    model = loadedModel
+                    if (isEnabled(this)) startListening()
+                }
+            }.onFailure { error ->
+                mainHandler.post {
+                    loadingModel = false
+                    updateNotification("No se pudo cargar el reconocimiento offline")
+                    android.util.Log.e(TAG, "No se pudo cargar el modelo Vosk", error)
+                }
             }
-            override fun onPartialResults(partialResults: android.os.Bundle?) = Unit
-            override fun onEvent(eventType: Int, params: android.os.Bundle?) = Unit
-        })
-        listening = true
-        val recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale("es", "ES"))
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
-        runCatching { recognizer?.startListening(recognitionIntent) }
-            .onFailure {
-                listening = false
-                updateNotification("No se pudo iniciar la escucha local")
-                restartListening()
-            }
     }
 
-    private fun restartListening() {
-        if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, false)) return
-        android.os.Handler(mainLooper).postDelayed({ runCatching { startListening() } }, 700L)
+    private fun copyAssetTree(assetPath: String, destination: File) {
+        val children = assets.list(assetPath).orEmpty()
+        if (children.isEmpty()) {
+            destination.parentFile?.mkdirs()
+            assets.open(assetPath).use { input ->
+                FileOutputStream(destination).use { output -> input.copyTo(output) }
+            }
+            return
+        }
+
+        destination.mkdirs()
+        children.forEach { child ->
+            copyAssetTree("$assetPath/$child", File(destination, child))
+        }
+    }
+
+    private fun startListening() {
+        if (listening || model == null || !isEnabled(this)) return
+        runCatching {
+            val recognizer = Recognizer(model, SAMPLE_RATE)
+            recognizer.setMaxAlternatives(1)
+            SpeechService(recognizer, SAMPLE_RATE).also { service ->
+                speechService = service
+                listening = true
+                transcriptWindow = ""
+                updateNotification("Escuchando offline · di: Novera y tu comando")
+                service.startListening(object : RecognitionListener {
+                    override fun onPartialResult(hypothesis: String) {
+                        val text = extractText(hypothesis)
+                        if (text.isNotBlank()) updateNotification("Escuchando: $text")
+                    }
+
+                    override fun onResult(hypothesis: String) {
+                        processHypothesis(hypothesis)
+                    }
+
+                    override fun onFinalResult(hypothesis: String) {
+                        processHypothesis(hypothesis)
+                        listening = false
+                        scheduleRestart()
+                    }
+
+                    override fun onError(exception: Exception) {
+                        android.util.Log.e(TAG, "Error de reconocimiento Vosk", exception)
+                        listening = false
+                        updateNotification("Reconocimiento offline activo; reintentando…")
+                        scheduleRestart()
+                    }
+
+                    override fun onTimeout() {
+                        listening = false
+                        scheduleRestart()
+                    }
+                }
+                )
+            }
+        }.onFailure { error ->
+            listening = false
+            updateNotification("No se pudo iniciar el micrófono offline")
+            android.util.Log.e(TAG, "No se pudo iniciar Vosk", error)
+            scheduleRestart()
+        }
+    }
+
+    private fun processHypothesis(hypothesis: String) {
+        val text = extractText(hypothesis)
+        if (text.isBlank()) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastTranscriptAt > WAKE_WINDOW_MS) transcriptWindow = ""
+        lastTranscriptAt = now
+        transcriptWindow = "$transcriptWindow $text".trim().takeLast(MAX_TRANSCRIPT_LENGTH)
+        if (now - lastHandledAt < COMMAND_COOLDOWN_MS) return
+
+        val response = VoiceAssistant.execute(this, transcriptWindow)
+        if (response != null) {
+            lastHandledAt = now
+            if (VoiceAssistant.isWakeWordOnly(transcriptWindow)) {
+                updateNotification("Te escucho · di tu comando")
+            } else {
+                transcriptWindow = ""
+                updateNotification(response)
+                runCatching { speechService?.reset() }
+            }
+        }
+    }
+
+    private fun extractText(hypothesis: String): String {
+        return runCatching {
+            val json = JSONObject(hypothesis)
+            json.optString("text").ifBlank { json.optString("partial") }
+        }.getOrDefault("").trim()
+    }
+
+    private fun scheduleRestart() {
+        if (!isEnabled(this)) return
+        mainHandler.postDelayed({
+            if (isEnabled(this)) {
+                runCatching {
+                    speechService?.cancel()
+                    speechService?.shutdown()
+                    speechService = null
+                }
+                startListening()
+            }
+        }, RESTART_DELAY_MS)
     }
 
     private fun stopListening() {
         listening = false
-        recognizer?.cancel()
-        recognizer?.destroy()
-        recognizer = null
+        mainHandler.removeCallbacksAndMessages(null)
+        runCatching { speechService?.cancel() }
+        runCatching { speechService?.shutdown() }
+        speechService = null
+        transcriptWindow = ""
+        lastTranscriptAt = 0L
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Asistente de voz", NotificationManager.IMPORTANCE_LOW).apply { description = "Estado del asistente local de Novera Audio" })
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "Asistente de voz",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply { description = "Estado del asistente local de Novera Audio" }
+            )
         }
     }
 
     private fun notification(message: String): Notification {
-        val stopIntent = PendingIntent.getService(this, 8, Intent(this, VoiceAssistantService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val openIntent = PendingIntent.getActivity(this, 9, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stopIntent = PendingIntent.getService(
+            this,
+            8,
+            Intent(this, VoiceAssistantService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val openIntent = PendingIntent.getActivity(
+            this,
+            9,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.novera_audio_icon)
-            .setContentTitle("Novera Audio · voz local")
+            .setContentTitle("Novera Audio · voz offline")
             .setContentText(message)
             .setOngoing(true)
             .setSilent(true)
@@ -126,32 +256,53 @@ class VoiceAssistantService : Service() {
     }
 
     private fun updateNotification(message: String) {
-        runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message)) }
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message))
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         stopListening()
+        modelExecutor.shutdownNow()
+        runCatching { model?.close() }
+        model = null
         super.onDestroy()
     }
 
     companion object {
+        private const val TAG = "NoveraVoice"
         private const val CHANNEL_ID = "novera_voice"
         private const val NOTIFICATION_ID = 1202
         private const val ACTION_STOP = "com.novera.audio.voice.STOP"
         private const val PREFS = "novera_voice"
         private const val KEY_ENABLED = "enabled"
+        private const val MODEL_ASSET_PATH = "model-es"
+        private const val MODEL_DIRECTORY = "vosk-model-es"
+        private const val SAMPLE_RATE = 16000.0f
+        private const val RESTART_DELAY_MS = 700L
+        private const val COMMAND_COOLDOWN_MS = 1800L
+        private const val MAX_TRANSCRIPT_LENGTH = 180
+        private const val WAKE_WINDOW_MS = 4500L
 
-        fun isEnabled(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+        fun isEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_ENABLED, false)
 
         fun start(context: Context) {
             val intent = Intent(context, VoiceAssistantService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(context, intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
-            context.startService(Intent(context, VoiceAssistantService::class.java).setAction(ACTION_STOP))
+            context.startService(
+                Intent(context, VoiceAssistantService::class.java).setAction(ACTION_STOP)
+            )
         }
     }
 }

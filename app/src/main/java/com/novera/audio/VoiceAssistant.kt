@@ -9,11 +9,22 @@ import androidx.media3.exoplayer.ExoPlayer
 import java.text.Normalizer
 
 object VoiceAssistant {
+    private val wakeWords = listOf("novera", "nover", "oye novera", "asistente")
+
+    fun isWakeWordOnly(spoken: String): Boolean {
+        val normalized = normalize(spoken)
+        return wakeWords.any { normalized == it }
+    }
+
     fun execute(context: Context, spoken: String): String? {
         val normalized = normalize(spoken)
-        val wakeWord = listOf("novera", "oye novera", "asistente")
-        if (wakeWord.none { normalized.contains(it) }) return null
-        val command = wakeWord.fold(normalized) { text, word -> text.replace(word, " ") }.trim()
+        val wakeWord = wakeWords.firstOrNull { normalized.contains(it) } ?: return null
+        val command = normalized
+            .replace(wakeWord, " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (command.isBlank()) return "Te escucho. Di un comando como pausa, siguiente o reproduce una canción"
+
         val player = PlaybackEngine.player(context)
         return when {
             command.contains("escane") || command.contains("buscar musica") || command.contains("buscar canciones") -> {
@@ -21,25 +32,35 @@ object VoiceAssistant {
                 "Encontré $count canciones en tu biblioteca local"
             }
             command.contains("siguiente") || command.contains("otra cancion") || command.contains("otra pista") -> {
-                player.seekToNextMediaItem(); "Pasando a la siguiente canción"
+                player.seekToNextMediaItem()
+                "Pasando a la siguiente canción"
             }
             command.contains("anterior") || command.contains("cancion anterior") -> {
-                player.seekToPreviousMediaItem(); "Regresando a la canción anterior"
+                player.seekToPreviousMediaItem()
+                "Regresando a la canción anterior"
             }
-            command == "pausa" || command.contains("pausa la musica") || command.contains("deten la musica") -> {
-                player.pause(); "Música pausada"
+            command.contains("paus") || command.contains("deten la musica") || command.contains("deten la musica") -> {
+                player.pause()
+                "Música pausada"
             }
-            command.contains("continua") || command.contains("reanuda") || command.contains("reproduce") && command.length < 18 -> {
-                player.play(); "Reanudando la música"
+            command == "continua" || command == "reanuda" || command.contains("continua la musica") || command.contains("reanuda la musica") -> {
+                player.play()
+                "Reanudando la música"
             }
             command.contains("repite esta") || command.contains("repetir esta") -> {
-                player.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE; "Repitiendo esta canción"
+                player.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+                "Repitiendo esta canción"
             }
             command.contains("agrega") && command.contains("playlist") -> addCurrentToPlaylist(context, command, player)
             command.contains("crea") && command.contains("playlist") -> createPlaylist(context, command)
-            command.startsWith("reproduce ") || command.startsWith("reproducime ") || command.startsWith("pon ") -> {
-                val query = command.substringAfter(' ').trim()
-                playMatching(context, player, query)
+            command.startsWith("reproduce") || command.startsWith("reproducime") || command.startsWith("pon ") -> {
+                val query = command.substringAfter(' ', "").trim()
+                if (query.isBlank() || query in setOf("la musica", "musica", "una cancion", "una pista")) {
+                    player.play()
+                    "Reanudando la música"
+                } else {
+                    playMatching(context, player, query)
+                }
             }
             else -> "No reconocí ese comando. Prueba diciendo: Novera, reproduce una canción"
         }
@@ -94,7 +115,11 @@ object VoiceAssistant {
         .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setAlbumTitle(track.album).build())
         .build()
 
-    private fun normalize(value: String): String = Normalizer.normalize(value.lowercase(), Normalizer.Form.NFD).replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "").replace(Regex("[^a-z0-9ñ ]"), " ").replace(Regex("\\s+"), " ").trim()
+    private fun normalize(value: String): String = Normalizer.normalize(value.lowercase(), Normalizer.Form.NFD)
+        .replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "")
+        .replace(Regex("[^a-z0-9ñ ]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 }
 
 object VoiceLibrary {

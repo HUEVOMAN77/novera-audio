@@ -4,7 +4,7 @@
 
 **Novera Audio** es un reproductor de música para Android enfocado en escuchar archivos locales de forma privada, elegante y sin depender de internet. Esta es su **primera versión pública** y seguirá mejorando poco a poco con nuevas funciones, optimizaciones y correcciones.
 
-[**Descargar Novera Audio v1.0.3**](https://github.com/HUEVOMAN77/novera-audio/releases/download/v1.0.3/Novera-Audio-v1.0.3.apk)
+[**Descargar Novera Audio v1.0.4**](https://github.com/HUEVOMAN77/novera-audio/releases/download/v1.0.4/Novera-Audio-v1.0.4.apk)
 
 ## Características
 
@@ -36,8 +36,8 @@
 | Copias de seguridad | Exporta y restaura playlists, reglas, marcadores, letras, perfiles, favoritos y temas mediante un archivo local. |
 | Widget | Muestra la canción actual y ofrece controles de reproducción desde la pantalla de inicio. |
 | Notificación multimedia | Permite pausar, reproducir, avanzar y cambiar de canción desde las notificaciones y la pantalla bloqueada. |
-| Asistente de voz local | Reconoce comandos como “Novera, pausa”, “Novera, siguiente”, “Novera, reproduce una canción”, “Novera, escanéame la música” y “Novera, añade esto a Carretera”. |
-| Control con pantalla bloqueada | El asistente puede continuar activo fuera de la aplicación con una notificación visible, siempre que el usuario lo haya activado y el dispositivo ofrezca reconocimiento local. |
+| Asistente de voz local | Reconoce offline comandos como “Novera, pausa”, “Novera, siguiente”, “Novera, reproduce una canción”, “Novera, escanéame la música” y “Novera, añade esto a Carretera”, incluso en dispositivos sin el motor de voz del fabricante. |
+| Control con pantalla bloqueada | El asistente puede continuar activo fuera de la aplicación con una notificación visible mientras el usuario lo haya activado y concedido el permiso de micrófono. |
 | Privacidad | La biblioteca, las playlists, los favoritos, las letras y las configuraciones se mantienen en el dispositivo. |
 
 ## Comandos de voz
@@ -56,8 +56,8 @@ Novera, agrega esto a playlist Carretera
 Novera, repite esta canción
 ```
 
-El asistente funciona con reconocimiento local cuando Android ofrece el modelo on-device. El teléfono completamente apagado no puede escuchar comandos, pero la función puede trabajar con la pantalla bloqueada mientras el servicio de escucha esté activo. Una notificación visible permite desactivar el asistente en cualquier momento.
+El asistente usa un modelo español Vosk integrado en la aplicación, por lo que el reconocimiento funciona sin internet ni Google Speech Services. El teléfono completamente apagado no puede escuchar comandos, pero la función puede trabajar con la pantalla bloqueada mientras el servicio de escucha esté activo. Una notificación visible permite desactivar el asistente en cualquier momento.
 
 ## Primera versión
 
-Novera Audio v1.0.3 es el comienzo del proyecto público. La aplicación continuará evolucionando gradualmente con mejoras de compatibilidad, eficiencia de batería, calidad de audio, reconocimiento de voz, organización de biblioteca, nuevas animaciones y más herramientas para escuchar música local.
+Novera Audio v1.0.4 es el comienzo del proyecto público. La aplicación continuará evolucionando gradualmente con mejoras de compatibilidad, eficiencia de batería, calidad de audio, reconocimiento de voz, organización de biblioteca, nuevas animaciones y más herramientas para escuchar música local.
