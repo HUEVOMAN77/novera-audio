@@ -4,7 +4,7 @@
 
 **Novera Audio** es un reproductor de música para Android enfocado en escuchar archivos locales de forma privada, elegante y sin depender de internet. Esta es su **primera versión pública** y seguirá mejorando poco a poco con nuevas funciones, optimizaciones y correcciones.
 
-[**Descargar Novera Audio v1.0.0**](https://github.com/HUEVOMAN77/novera-audio/releases/download/v1.0.0/Novera-Audio-v1.0.0.apk)
+[**Descargar Novera Audio v1.0.1**](https://github.com/HUEVOMAN77/novera-audio/releases/download/v1.0.1/Novera-Audio-v1.0.1.apk)
 
 ## Características
 
@@ -60,4 +60,4 @@ El asistente funciona con reconocimiento local cuando Android ofrece el modelo o
 
 ## Primera versión
 
-Novera Audio v1.0.0 es el comienzo del proyecto público. La aplicación continuará evolucionando gradualmente con mejoras de compatibilidad, eficiencia de batería, calidad de audio, reconocimiento de voz, organización de biblioteca, nuevas animaciones y más herramientas para escuchar música local.
+Novera Audio v1.0.1 es el comienzo del proyecto público. La aplicación continuará evolucionando gradualmente con mejoras de compatibilidad, eficiencia de batería, calidad de audio, reconocimiento de voz, organización de biblioteca, nuevas animaciones y más herramientas para escuchar música local.

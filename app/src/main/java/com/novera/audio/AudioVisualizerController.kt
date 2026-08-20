@@ -1,6 +1,7 @@
 package com.novera.audio
 
 import android.media.audiofx.Visualizer
+import android.os.Build
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -8,24 +9,24 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 class AudioVisualizerController {
-    private val _bars = MutableStateFlow(List(36) { 0.12f })
+    private val _bars = MutableStateFlow(emptyList<Float>())
     val bars: StateFlow<List<Float>> = _bars.asStateFlow()
     private var visualizer: Visualizer? = null
 
     fun attach(audioSessionId: Int) {
         release()
-        if (audioSessionId <= 0) return
+        if (audioSessionId <= 0 || isKnownUnstableManufacturer()) return
         runCatching {
             val effect = Visualizer(audioSessionId)
             val range = Visualizer.getCaptureSizeRange()
             effect.captureSize = range[1]
             effect.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                 override fun onWaveFormDataCapture(visualizer: Visualizer, waveform: ByteArray, samplingRate: Int) {
-                    publishWaveform(waveform)
+                    runCatching { publishWaveform(waveform) }
                 }
 
                 override fun onFftDataCapture(visualizer: Visualizer, fft: ByteArray, samplingRate: Int) {
-                    publishFft(fft)
+                    runCatching { publishFft(fft) }
                 }
             }, Visualizer.getMaxCaptureRate() / 2, true, true)
             effect.enabled = true
@@ -37,6 +38,13 @@ class AudioVisualizerController {
         runCatching { visualizer?.enabled = false }
         runCatching { visualizer?.release() }
         visualizer = null
+        _bars.value = emptyList()
+    }
+
+    private fun isKnownUnstableManufacturer(): Boolean {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val brand = Build.BRAND.lowercase()
+        return manufacturer.contains("huawei") || manufacturer.contains("honor") || brand.contains("huawei") || brand.contains("honor")
     }
 
     private fun publishWaveform(data: ByteArray) {

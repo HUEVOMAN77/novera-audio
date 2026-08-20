@@ -148,6 +148,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.documentfile.provider.DocumentFile
@@ -238,6 +239,10 @@ class PlayerViewModel(application: android.app.Application) : AndroidViewModel(a
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 _state.update { it.copy(durationMs = player.duration.takeIf { value -> value > 0 } ?: 0L) }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                _state.update { it.copy(isPlaying = false, notice = "No se pudo reproducir esta pista en el dispositivo") }
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
